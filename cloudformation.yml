@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: SNS/SQS Setup for Example SQS Consumer
+
+Parameters:
+    DeveloperRolename:
+        Description: Name of the role developers will use locally to assume the service role
+        Type: String
+    QueueName:
+        Default: example-helloworld-requests
+        Description: Name of the SQS Queue
+        Type: String
+    TestQueueName:
+        Default: test-example-helloworld-requests
+        Description: Name of the SQS Queue used for testing
+        Type: String
+    TopicName:
+        Default: example-hello-request
+        Description: Name of the SNS Topic that fill flow into the queue
+        Type: String
+    TestTopicName:
+        Default: test-example-hello-request
+        Description: Name of the SNS Topic that fill flow into the test queue
+        Type: String
+
+Resources:
+    Topic:
+        Type: AWS::SNS::Topic
+        Properties: 
+          DisplayName: !Sub ${TopicName}
+          TopicName: !Sub ${TopicName}
+    TestTopic:
+        Type: AWS::SNS::Topic
+        Properties: 
+          DisplayName: !Sub ${TestTopicName}
+          TopicName: !Sub ${TestTopicName}
+    Queue:
+        Type: AWS::SQS::Queue
+        Properties: 
+            QueueName: !Sub ${QueueName}
+            ReceiveMessageWaitTimeSeconds: 20
+            VisibilityTimeout: 30
+            MessageRetentionPeriod: 345600 # seconds (4 days)
+            RedrivePolicy:
+                deadLetterTargetArn: 
+                    Fn::GetAtt: 
+                    - "DeadletterQueue"
+                    - "Arn"
+                maxReceiveCount: 5
+    TestQueue:
+        Type: AWS::SQS::Queue
+        Properties: 
+            QueueName: !Sub ${TestQueueName}
+            ReceiveMessageWaitTimeSeconds: 20
+            VisibilityTimeout: 30
+            MessageRetentionPeriod: 345600 # seconds (4 days)      
+    QueuePolicy:
+        Type: 'AWS::SQS::QueuePolicy'
+        Properties:
+            PolicyDocument:
+                Version: '2012-10-17'
+                Id: sqspolicy
+                Statement:
+                    Sid: SendMessage-To-Queue-From-SNS-Topic
+                    Effect: Allow
+                    Principal: "*"
+                    Action:
+                        - 'sqs:SendMessage'
+                    Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Queue.QueueName}
+                    Condition:
+                        ArnEquals:
+                            aws:SourceArn: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${Topic.TopicName}
+            Queues:
+            - !Sub ${Queue}
+        DependsOn:
+            - Queue
+    TestQueuePolicy:
+        Type: 'AWS::SQS::QueuePolicy'
+        Properties:
+            PolicyDocument:
+                Version: '2012-10-17'
+                Id: sqspolicy
+                Statement:
+                    Sid: SendMessage-To-Queue-From-SNS-Topic
+                    Effect: Allow
+                    Principal: "*"
+                    Action:
+                        - 'sqs:SendMessage'
+                    Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${TestQueue.QueueName}
+                    Condition:
+                        ArnEquals:
+                            aws:SourceArn: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${TestTopic.TopicName}
+            Queues:
+            - !Sub ${TestQueue}
+        DependsOn:
+            - TestQueue
+    DeadletterQueue:
+        Type: AWS::SQS::Queue
+        Properties:
+            QueueName: !Sub ${QueueName}-deadletter
+    SnsSubscription:
+        DependsOn: Queue
+        Type: AWS::SNS::Subscription
+        Properties:
+            Endpoint: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Queue.QueueName}
+            Protocol: SQS
+            TopicArn: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${Topic.TopicName}
+    TestSnsSubscription:
+        DependsOn: Queue
+        Type: AWS::SNS::Subscription
+        Properties:
+            Endpoint: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${TestQueue.QueueName}
+            Protocol: SQS
+            TopicArn: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${TestTopic.TopicName}
+    SQSConsumerRole:
+        Type: 'AWS::IAM::Role'
+        Properties:
+          RoleName: role-example-sqsconsumer
+          AssumeRolePolicyDocument:
+            Statement:
+              - Action:
+                  - sts:AssumeRole
+                Effect: Allow
+                Principal:
+                  Service:
+                    - ecs-tasks.amazonaws.com
+                  AWS: !Sub arn:aws:iam::${AWS::AccountId}:role/${DeveloperRolename}
+            Version: '2012-10-17'
+          Policies:
+            - PolicyDocument:
+                Statement:
+                  - Action:
+                      - sqs:GetQueueUrl
+                      - sqs:ReceiveMessage
+                      - sqs:DeleteMessage
+                    Effect: Allow
+                    Resource:
+                        - !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Queue.QueueName}
+                        - !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${TestQueue.QueueName}
+                Version: '2012-10-17'
+              PolicyName: policy-example-sqsconsumer
